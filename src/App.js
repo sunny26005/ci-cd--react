@@ -1,0 +1,232 @@
+// frontend/src/App.js
+
+import React, { useState, useEffect, useMemo, useRef } from "react";
+import api from "./axiosMiddleware";
+import "./App.css";
+
+import UploadControls from "./components/UploadControls";
+import OriginalImageBox from "./components/OriginalImageBox";
+import OutputImageBox from "./components/OutputImageBox";
+import HistoryTable from "./components/HistoryTable";
+import ColonyCountBox from "./components/ColonyCountBox";
+
+function App() {
+  const [image, setImage] = useState(null);
+  const [outputImage, setOutputImage] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+
+  // 🔥 NEW STATES
+  const [colonyCount, setColonyCount] = useState(null);
+  const [plateType, setPlateType] = useState(null);
+  const [bacteria, setBacteria] = useState(null);
+  const [confidence, setConfidence] = useState(null);
+
+  // ✅ THEME STATE (NEW)
+  const [theme, setTheme] = useState("light");
+  const [spriteCycle, setSpriteCycle] = useState(0);
+  const previousSpritePositionsRef = useRef([]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setSpriteCycle((prev) => prev + 1);
+    }, 12000);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  const floatingSprites = useMemo(() => {
+    const gifPool = [
+      "/Bacterium,_Single_cell_organism_20260330172004.gif",
+      "/bacterium_20260330172046.gif",
+    ];
+    const spriteCount = 10;
+
+    const random = (min, max) => Math.random() * (max - min) + min;
+    const previousPositions = previousSpritePositionsRef.current;
+
+    const nextSprites = Array.from({ length: spriteCount }, (_, i) => {
+      let x = random(4, 92);
+      let y = random(8, 86);
+
+      const previous = previousPositions[i];
+      let attempts = 0;
+      while (
+        previous &&
+        Math.abs(x - previous.x) < 12 &&
+        Math.abs(y - previous.y) < 10 &&
+        attempts < 14
+      ) {
+        x = random(4, 92);
+        y = random(8, 86);
+        attempts += 1;
+      }
+
+      const dx = random(22, 48) * (Math.random() > 0.5 ? 1 : -1);
+      const dy = random(18, 42) * (Math.random() > 0.5 ? 1 : -1);
+      const rot = random(4, 12) * (Math.random() > 0.5 ? 1 : -1);
+      const dx2 = dx * -0.55;
+      const dy2 = dy * 0.55;
+      const rot2 = rot * -0.45;
+      const dx3 = dx * 0.28;
+      const dy3 = dy * -0.25;
+      const rot3 = rot * 0.2;
+
+      return {
+        id: `bg-gif-${spriteCycle}-${i}`,
+        src: gifPool[Math.floor(Math.random() * gifPool.length)],
+        position: { x, y },
+        style: {
+          "--x": `${x.toFixed(1)}%`,
+          "--y": `${y.toFixed(1)}%`,
+          "--size": `${random(56, 86).toFixed(0)}px`,
+          "--dur": `${random(10, 16).toFixed(1)}s`,
+          "--delay": `${random(0, 1.8).toFixed(2)}s`,
+          "--dx": `${dx.toFixed(0)}px`,
+          "--dy": `${dy.toFixed(0)}px`,
+          "--rot": `${rot.toFixed(0)}deg`,
+          "--dx2": `${dx2.toFixed(0)}px`,
+          "--dy2": `${dy2.toFixed(0)}px`,
+          "--rot2": `${rot2.toFixed(1)}deg`,
+          "--dx3": `${dx3.toFixed(0)}px`,
+          "--dy3": `${dy3.toFixed(0)}px`,
+          "--rot3": `${rot3.toFixed(1)}deg`,
+        },
+      };
+    });
+
+    previousSpritePositionsRef.current = nextSprites.map((sprite) => sprite.position);
+    return nextSprites;
+  }, [spriteCycle]);
+
+  useEffect(() => {
+    const fetchHistory = async () => {
+      try {
+        const res = await api.get("/history");
+        setHistory(res.data);
+      } catch (err) {
+        console.error("Error fetching history:", err);
+        setErrorMsg("Failed to fetch history from backend.");
+      }
+    };
+    fetchHistory();
+  }, []);
+
+  const getFriendlyUploadError = (err) => {
+    const detail = err?.response?.data?.detail;
+    const message = typeof detail === "string" ? detail : "";
+
+    if (message.includes("File size too large")) {
+      return "File is too large. Please upload an image below 10 MB.";
+    }
+
+    return detail || "Error uploading or processing image.";
+  };
+
+  const handleImageUpload = async (e) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      setImage(URL.createObjectURL(file));
+      setLoading(true);
+      setErrorMsg("");
+      setOutputImage(null);
+
+      // 🔥 RESET EVERYTHING
+      setColonyCount(null);
+      setPlateType(null);
+      setBacteria(null);
+      setConfidence(null);
+
+      const formData = new FormData();
+      formData.append("file", file);
+
+      try {
+        const res = await api.post("/ingest/petri-dish", formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+
+        const data = res.data;
+
+        setOutputImage(data.output_image_url);
+        setColonyCount(data.colony_count);
+        setPlateType(data.type);
+        setBacteria(data.bacteria);
+        setConfidence(data.confidence);
+
+        const historyRes = await api.get("/history");
+        setHistory(historyRes.data);
+
+      } catch (err) {
+        console.error("Upload error:", err);
+        setErrorMsg(getFriendlyUploadError(err));
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  return (
+    <div className={`container ${theme}`}>
+      <div className="background-gif-layer" aria-hidden="true">
+        {floatingSprites.map((sprite) => (
+          <img
+            key={sprite.id}
+            src={sprite.src}
+            alt=""
+            className="bg-gif"
+            style={sprite.style}
+          />
+        ))}
+      </div>
+
+      <header className="header">
+        
+        {/* LEFT SIDE */}
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <img
+            src={require("./bacterial-colony-growth-on-agar.jpg")}
+            alt="ColonySight Logo"
+            className="logo"
+            style={{ width: "100px", height: "100px" }}
+          />
+          <h1>Detect Bacterial Colonies</h1>
+        </div>
+
+        {/* RIGHT SIDE (THEME TOGGLE) */}
+        <button
+          className="theme-toggle"
+          onClick={() =>
+            setTheme(theme === "light" ? "dark" : "light")
+          }
+        >
+          {theme === "light" ? "🌙 Dark" : "☀️ Light"}
+        </button>
+      </header>
+
+      <div className="main-content">
+        <UploadControls handleImageUpload={handleImageUpload} />
+
+        {/* 🔥 ANALYSIS RESULT */}
+        <ColonyCountBox
+          count={colonyCount}
+          type={plateType}
+          bacteria={bacteria}
+          confidence={confidence}
+        />
+
+        <div className="image-section-wrapper">
+          <OriginalImageBox image={image} />
+          <OutputImageBox outputImage={outputImage} loading={loading} />
+        </div>
+
+        {loading && <p className="loading">Processing image...</p>}
+        {errorMsg && <p className="error">{errorMsg}</p>}
+
+        <HistoryTable history={history} />
+      </div>
+    </div>
+  );
+}
+
+export default App;
